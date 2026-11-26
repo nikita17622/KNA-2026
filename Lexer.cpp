@@ -1,6 +1,7 @@
 #include "Lexer.h"
 #include "Error.h"
 #include <cstring>
+#include <cstdlib>
 #include <string>
 #include <iomanip>
 #include <cstdio>
@@ -9,15 +10,23 @@
 using namespace std;
 namespace LEXER
 {
-	IT::IDDATATYPE iddatatype = IT::IDDATATYPE::NONE;
-	IT::IDTYPE idtype = IT::IDTYPE::V;
+	IT::IDDATATYPE iddatatype = IT::IDDATATYPE::NONE;   // тип данных последнего слова-типа / литерала
+	IT::IDTYPE idtype = IT::IDTYPE::V;                  // нужен только сигнатуре Automats, лексер его больше не использует
+	bool islet = false;                                 // сейчас накоплен литерал в кавычках
+	int lastIndex = 0;                                  // не используется (оставлен, т.к. объявлен в Lexer.h)
+
+	// ---- состояние для определения вида идентификатора (V / F / P) и типов ----
+	static int  lastDecl = -1;      // индекс в ТИ последнего ОБЪЯВЛЕННОГО идентификатора: ему достанется тип из "имя: тип"
+	static int  curFunc = -1;       // индекс в ТИ последней объявленной функции: ей достанется тип из "-> тип"
+	static bool inHeader = false;   // мы внутри скобок заголовка функции fn имя( ... ) -> идентификаторы здесь параметры
+	static char nextSym = '\0';     // ближайший непробельный символ после текущего слова (отличает вызов f( от переменной)
+	static int  litCount = 0;       // счётчик для имён литералов в ТИ: L0, L1, ...
 
 	Lexer::Lexer()
 	{
 		lexTable = LT::Create(LT_MAXSIZE);
-		IdTable = IT::Create(TI_MAXSIZE);
+		idTable = IT::Create(TI_MAXSIZE);
 		line = 0;
-
 	}
 
 	void Lexer::AddLex(char lexSymbol, int line)
@@ -27,122 +36,232 @@ namespace LEXER
 		ltentry.idxTI = LT_TI_NULLIDX;
 		ltentry.numberStr = line;
 		LT::Add(lexTable, ltentry);
+		islet = false;
 	}
 
-	void Lexer::AddIdentifikator(char lexSymbol, int line, char word[])
+	// Литерал получает СВОЮ запись в ТИ (idtype = L). Раньше значение затирало последний идентификатор.
+	void Lexer::AddLeteral(char lexSymbol, int line, char word[])
 	{
-		int id = IsId(IdTable, word);
+		islet = false;
+		IT::Entry e = {};                               // обнуляем: value = 0
+		e.idtype = IT::L;
+		e.iddatatype = iddatatype;
+		e.idxFirstLT = lexTable.size;
+		sprintf_s(e.id, "L%d", litCount++);
+
+		switch (iddatatype)
+		{
+		case IT::INT:    e.value.valInt = (int)strtoll(word, nullptr, 10); break;
+		case IT::BOOL:   e.value.valBool = (strcmp(word, "true") == 0); break;
+		case IT::SYMBOL: e.value.valSymbol = word[0]; break;
+		case IT::STR:
+		{
+			size_t n = strlen(word);                    // длина уже проверена при чтении (<= STR_CAP)
+			memcpy(e.value.valStr.str, word, n);
+			e.value.valStr.str[n] = '\0';
+			e.value.valStr.len = (char)n;               // в IT.h лучше сделать unsigned char len
+			break;
+		}
+		default: break;
+		}
+		IT::Add(idTable, e);
 
 		LT::Entry ltentry;
 		ltentry.lexema[0] = lexSymbol;
 		ltentry.numberStr = line;
-		ltentry.idxTI = id == -1 ? LT_TI_NULLIDX : IdTable.size;
-		if (id == -1)
-		{
-			IT::Entry itentry;
-			itentry.iddatatype = iddatatype;
-			itentry.idtype = idtype;
-			strncpy_s(itentry.id, sizeof(itentry.id), word, 5);
-			itentry.id[ID_MAXSIZE] = '\0';
-			itentry.idxFirstLT = lexTable.size;
-		    IT:Add(IdTable, itentry);
-		}
+		ltentry.idxTI = idTable.size - 1;               // индекс ТОЛЬКО ЧТО добавленной записи
 		LT::Add(lexTable, ltentry);
+	}
+
+	// Вид идентификатора определяем по ПРЕДЫДУЩЕЙ лексеме в ТЛ:
+	//   fn  <имя>            -> F (функция)
+	//   let <имя>            -> V (переменная)
+	//   fn имя( <имя> : ...  -> P (параметр: внутри скобок заголовка, после '(' или ',')
+	//   иначе - использование: имя( -> F (вызов), остальное -> V
+	void Lexer::AddIdentifikator(char lexSymbol, int line, char word[])
+	{
+		islet = false;
+		if (strlen(word) >= ID_MAXSIZE) word[ID_MAXSIZE - 1] = '\0';   // усечение ДО поиска в ТИ, иначе длинное имя не найдётся
+
+		char prev = lexTable.size > 0 ? lexTable.table[lexTable.size - 1].lexema[0] : '\0';
+		bool decl = true;
+		IT::IDTYPE kind;
+		if (prev == LEX_FUNCTION) kind = IT::F;
+		else if (prev == LEX_LET) kind = IT::V;
+		else if (inHeader && (prev == LEX_LEFTHESIS || prev == LEX_COMMA)) kind = IT::P;
+		else { decl = false; kind = (nextSym == '(') ? IT::F : IT::V; }
+
+		int idx = IT::IsId(idTable, word);
+		if (idx == -1)                                  // новый идентификатор
+		{
+			IT::Entry e = {};
+			e.iddatatype = IT::NONE;                    // тип придёт позже: он записывается после имени ("x: integer")
+			e.idtype = kind;
+			e.idxFirstLT = lexTable.size;
+			strncpy_s(e.id, sizeof(e.id), word, _TRUNCATE);
+			IT::Add(idTable, e);
+			idx = idTable.size - 1;
+		}
+		if (decl)
+		{
+			lastDecl = idx;
+			if (kind == IT::F) curFunc = idx;
+		}
+
+		LT::Entry ltentry;
+		ltentry.lexema[0] = lexSymbol;
+		ltentry.numberStr = line;
+		ltentry.idxTI = idx;                            // был инвертирован: новый -> NULL, существующий -> size
+		LT::Add(lexTable, ltentry);
+	}
+
+	void Lexer::FunctionCall(char& lexSymbol, int currentLine, char word[])
+	{
+		if (lexSymbol == '\0') return;
+		char prev = lexTable.size > 0 ? lexTable.table[lexTable.size - 1].lexema[0] : '\0';
+
+		if (lexSymbol == LEX_ID) AddIdentifikator(lexSymbol, currentLine, word);
+		else if (lexSymbol == LEX_LITERAL) AddLeteral(lexSymbol, currentLine, word);
+		else if (lexSymbol == LEX_MAIN && prev == LEX_FUNCTION) AddIdentifikator(lexSymbol, currentLine, word);  // fn main: функция тоже попадает в ТИ
+		else
+		{
+			if (lexSymbol == 't')       // слово-тип стоит ПОСЛЕ имени
+			{
+				if (prev == LEX_COLON && lastDecl >= 0) idTable.table[lastDecl].iddatatype = iddatatype;   // x: integer
+				else if (prev == LEX_ARROW && curFunc >= 0) idTable.table[curFunc].iddatatype = iddatatype; // -> integer
+			}
+			else if (lexSymbol == LEX_LEFTHESIS)   // '(' сразу после "fn имя" открывает список параметров
+			{
+				int n = lexTable.size;
+				char p2 = n >= 2 ? lexTable.table[n - 2].lexema[0] : '\0';
+				inHeader = (prev == LEX_ID || prev == LEX_MAIN) && p2 == LEX_FUNCTION;
+			}
+			else if (lexSymbol == LEX_RIGHTHESIS) inHeader = false;
+			AddLex(lexSymbol, currentLine);
+		}
+		lexSymbol = '\0';
+		iddatatype = IT::IDDATATYPE::NONE;     // сброс: иначе тип "протекает" в следующие слова
+		idtype = IT::IDTYPE::V;
+	}
+
+	void Lexer::CallCheckFunction(char* word, char& lexSymbol, int& len, int& c, int& lengthWord)
+	{
+		word[lengthWord] = '\0';
+		Automats::FindFST(word, lexSymbol, idtype, iddatatype, len, c, islet);
+		lengthWord = 0;
 	}
 
 	void Lexer::LexicalAnalysis(In::IN& in, Log::LOG& log)
 	{
-
-		char word[256];
+		char word[256] = "";
 		char currentSymbol, lexSymbol = '\0';
 		int currentPos = 0, currentLine = 1, lengthWord = 0;
+		const int STR_CAP = (int)sizeof(IT::Entry::value.valStr.str) - 1;   // макс. символов строки (без '\0')
 
-		for (int i = 0; i < in.size; i++)
+		// добавить символ в строку-литерал с проверкой границы
+		auto put = [&](char ch) { if (lengthWord >= STR_CAP) throw ERROR_THROW(129); word[lengthWord++] = ch; };
+
+		for (int i = 0; i <= in.size; i++)    // i == in.size: '\0' работает как стоп-символ и сбрасывает последнее слово
 		{
 			currentSymbol = in.text[i];
 			currentPos++;
 
-			if (currentSymbol == '\n' || currentSymbol == '\r')
+			int k = i;                         // ближайший непробельный символ (текст оканчивается '\0')
+			while (in.text[k] == ' ' || in.text[k] == '\t') k++;
+			nextSym = in.text[k];
+
+			if (currentSymbol == '\n' || currentSymbol == '\0')
 			{
+				CallCheckFunction(word, lexSymbol, currentLine, currentPos, lengthWord);
+				FunctionCall(lexSymbol, currentLine, word);      // ДО currentLine++: лексема остаётся на своей строке
 				currentLine++;
-				word[lengthWord] = '\0';
-				Automats::FindFST(word, lexSymbol, idtype, iddatatype, currentLine, currentPos);
-				lengthWord = 0;
 				currentPos = 0;
 			}
-			else if (currentSymbol == '\t' || currentSymbol == ' ')
+			else if (currentSymbol == '\t' || currentSymbol == ' ' || currentSymbol == '\r')
 			{
-				word[lengthWord] = '\0';
-				Automats::FindFST(word, lexSymbol, idtype, iddatatype, currentLine, currentPos);
-				lengthWord = 0;
+				CallCheckFunction(word, lexSymbol, currentLine, currentPos, lengthWord);
 			}
-			else if (strchr("(){}+-=/*,;", currentSymbol))
+			else if (strchr("(){}+=/*,;%:?", currentSymbol))
 			{
-				word[lengthWord] = '\0';
-				if (Automats::FindFST(word, lexSymbol, idtype, iddatatype, currentLine, currentPos));
-				lengthWord = 0;
-				if (lexSymbol == 'i' || lexSymbol == 'l')
-				{
-					AddIdentifikator(lexSymbol, currentLine, word);
-					lexSymbol = '\0';
-				}
-				if (lexSymbol != '\0')
-				{
-					AddLex(lexSymbol, currentLine);
-					lexSymbol = '\0';
-				}
+				CallCheckFunction(word, lexSymbol, currentLine, currentPos, lengthWord);
+				FunctionCall(lexSymbol, currentLine, word);
 
 				word[lengthWord++] = currentSymbol;
-				word[lengthWord] = '\0';
-				Automats::FindFST(word, lexSymbol, idtype, iddatatype, currentLine, currentPos);
-				lengthWord = 0;
+				CallCheckFunction(word, lexSymbol, currentLine, currentPos, lengthWord);
+			}
+			else if (currentSymbol == '\"')
+			{
+				CallCheckFunction(word, lexSymbol, currentLine, currentPos, lengthWord);
+				FunctionCall(lexSymbol, currentLine, word);      // слово перед кавычкой не должно потеряться
+
+				currentSymbol = in.text[++i];
+				currentPos++;
+				while (currentSymbol != '\"')
+				{
+					if (currentSymbol == '\0') throw ERROR_THROW(129);          // кавычка не закрыта
+					if (currentSymbol == '\\' && in.text[i + 1] != '\0')        // \" и \\ не закрывают строку
+					{
+						put(currentSymbol);
+						currentSymbol = in.text[++i];
+					}
+					put(currentSymbol);
+					currentSymbol = in.text[++i];
+				}
+				iddatatype = IT::IDDATATYPE::STR;
+				islet = true;
+				CallCheckFunction(word, lexSymbol, currentLine, currentPos, lengthWord);
 			}
 			else if (currentSymbol == '\'')
 			{
+				CallCheckFunction(word, lexSymbol, currentLine, currentPos, lengthWord);
+				FunctionCall(lexSymbol, currentLine, word);
 
-				word[lengthWord] = '\0';
-				Automats::FindFST(word, lexSymbol, idtype, iddatatype, currentLine, currentPos);
-				lengthWord = 0;
-
-				currentSymbol = in.text[++i]; 
+				currentSymbol = in.text[++i];
 				currentPos++;
+				if (currentSymbol == '\'' || currentSymbol == '\0') throw ERROR_THROW(129);   // пустой или незакрытый symbol
+				word[lengthWord++] = currentSymbol;
+				if (in.text[++i] != '\'') throw ERROR_THROW(129);
 
-				while (currentSymbol != '\'')
-				{
-					if (lengthWord == TI_STR_MAXSIZE + 1) throw ERROR_THROW(129);
-					word[lengthWord++] = currentSymbol;
-					currentSymbol = in.text[++i];	
-				}
-				word[lengthWord] = '\0';
-				Automats::IsLiteral(word, lexSymbol, idtype);
-				lengthWord = 0;
+				iddatatype = IT::IDDATATYPE::SYMBOL;
+				islet = true;
+				CallCheckFunction(word, lexSymbol, currentLine, currentPos, lengthWord);
+			}
+			else if (currentSymbol == '<' || currentSymbol == '>')    // < << > >>
+			{
+				CallCheckFunction(word, lexSymbol, currentLine, currentPos, lengthWord);
+				FunctionCall(lexSymbol, currentLine, word);
+
+				word[lengthWord++] = currentSymbol;
+				if (in.text[i + 1] == currentSymbol) { word[lengthWord++] = currentSymbol; i++; }
+				CallCheckFunction(word, lexSymbol, currentLine, currentPos, lengthWord);
+			}
+			else if (currentSymbol == '-')                            // - и ->
+			{
+				CallCheckFunction(word, lexSymbol, currentLine, currentPos, lengthWord);
+				FunctionCall(lexSymbol, currentLine, word);
+
+				word[lengthWord++] = currentSymbol;
+				if (in.text[i + 1] == '>') { word[lengthWord++] = '>'; i++; }
+				CallCheckFunction(word, lexSymbol, currentLine, currentPos, lengthWord);
 			}
 			else
 			{
-				word[lengthWord] = currentSymbol;
-				lengthWord++;
+				if (lengthWord >= (int)sizeof(word) - 1) throw ERROR_THROW_IN(127, currentLine, currentPos);   // слишком длинное слово
+				word[lengthWord++] = currentSymbol;
 			}
-
-			if (lexSymbol == 'i' || lexSymbol == 'l')
-			{
-				AddIdentifikator(lexSymbol, currentLine, word);
-				lexSymbol = '\0';
-			}
-			if (lexSymbol != '\0')
-			{
-				AddLex(lexSymbol, currentLine);
-				lexSymbol = '\0';
-			}
-
-
+			FunctionCall(lexSymbol, currentLine, word);
 		}
 	}
 
 	void Lexer::PrintTables(Log::LOG& log)
 	{
 		if (!log.stream) return;
+
+		// ============================================================
+		// 1. ТАБЛИЦА ЛЕКСЕМ (ТЛ)
+		// ============================================================
 		*(log.stream) << "            ТАБЛИЦА ЛЕКСЕМ (ТЛ)\n";
-		char currentLine = -1;
+		int currentLine = -1;                 // был char: после строки 127 номера строк ломались
 
 		for (int i = 0; i < lexTable.size; i++)
 		{
@@ -150,252 +269,58 @@ namespace LEXER
 			if (e.numberStr != currentLine) {
 				if (currentLine != -1) *(log.stream) << "\n";
 				currentLine = e.numberStr;
-				*(log.stream) << " Строка " << setw(2) << e.numberStr << ": ";
+				*(log.stream) << " Строка " << setw(3) << e.numberStr << ": ";
 			}
-
 			*(log.stream) << e.lexema[0];
 		}
 		*(log.stream) << "\n\n";
 
-		*(log.stream) << "         ТАБЛИЦА ИДЕНТИФИКАТОРОВ (ТИ)\n";
+		// ============================================================
+		// 2. ТАБЛИЦА ИДЕНТИФИКАТОРОВ (ТИ)
+		// ============================================================
+		*(log.stream) << "                     ТАБЛИЦА ИДЕНТИФИКАТОРОВ (ТИ)\n";
+		*(log.stream) << "=======================================================================================\n";
 		*(log.stream) << setw(5) << left << "ID"
-			<< setw(10) << left << "Имя" << setw(10) << left << "Тип данных" << setw(15) << left << "Тип ID" << setw(10) << left << "Индекс ТЛ" << "Значение" << "\n";
+			<< setw(15) << left << "Имя"
+			<< setw(12) << left << "Тип данных"
+			<< setw(15) << left << "Тип ID"
+			<< setw(10) << left << "Индекс ТЛ"
+			<< "Значение" << "\n";
+		*(log.stream) << "=======================================================================================\n";
 
-
-		for (int i = 0; i < IdTable.size; i++)
+		for (int i = 0; i < idTable.size; i++)
 		{
-			IT::Entry e = IdTable.table[i];
+			IT::Entry e = idTable.table[i];
 
-			string typeStr;
-			if (e.iddatatype == IT::INT)  typeStr = "INT";
-			if (e.iddatatype == IT::STR)  typeStr = "STR";
-			if (e.iddatatype == IT::NONE)  typeStr = "NONE";
+			const char* typeStr = "NONE";
+			if (e.iddatatype == IT::INT)    typeStr = "INT";
+			if (e.iddatatype == IT::STR)    typeStr = "STR";
+			if (e.iddatatype == IT::SYMBOL) typeStr = "SYMBOL";
+			if (e.iddatatype == IT::BOOL)   typeStr = "BOOL";
 
-			string idtypeStr = "";
+			const char* idtypeStr = "";
 			switch (e.idtype) {
 			case IT::V: idtypeStr = "Переменная"; break;
-			case IT::F: idtypeStr = "Функция"; break;
-			case IT::P: idtypeStr = "Параметр"; break;
-			case IT::L: idtypeStr = "Литерал"; break;
+			case IT::F: idtypeStr = "Функция";    break;
+			case IT::P: idtypeStr = "Параметр";   break;
+			case IT::L: idtypeStr = "Литерал";    break;
 			}
 
-			*(log.stream) << setw(5) << left << i << setw(10) << left << e.id << setw(10) << left << typeStr << setw(15) << left << idtypeStr << setw(10) << left << e.idxFirstLT;
+			*(log.stream) << setw(5) << left << i
+				<< setw(15) << left << e.id
+				<< setw(12) << left << typeStr
+				<< setw(15) << left << idtypeStr
+				<< setw(10) << left << e.idxFirstLT;
+
+			// значение есть только у литералов; читаем то поле union, которое записывали
+			if (e.idtype != IT::L)                     *(log.stream) << "-";
+			else if (e.iddatatype == IT::INT)          *(log.stream) << e.value.valInt;
+			else if (e.iddatatype == IT::STR)          *(log.stream) << "\"" << e.value.valStr.str << "\"";
+			else if (e.iddatatype == IT::SYMBOL)       *(log.stream) << "'" << e.value.valSymbol << "'";   // был valStr.str: читал мусор
+			else if (e.iddatatype == IT::BOOL)         *(log.stream) << (e.value.valBool ? "true" : "false"); // был valInt == 1: читал мусор
+
 			*(log.stream) << "\n";
 		}
+		*(log.stream) << "=======================================================================================\n\n";
 	}
 }
-
-
-
-
-
-//#include "Lexer.h"
-//#include "Error.h"
-//#include "Automats.h"
-//#include <cstring>
-//#include <cstdio>
-//#include <cstdarg>
-//#include <climits>
-//
-//namespace Lexer
-//{
-//	LT::LexTable LexTable = LT::Create(LT_MAXSIZE);
-//	IT::IdTable IdTable = IT::Create(TI_MAXSIZE);
-//
-//	bool IsLetter(char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_'; }
-//	bool IsDigit(char c) { return c >= '0' && c <= '9'; }
-//
-//	namespace
-//	{
-//		const int NONE = (int)TI_NULLIDX;   // "нет индекса" (-1), одинаково для LT и IT
-//
-//		// Форматированная строка в протокол (Log::WriteLine требует завершающий "")
-//		void Row(Log::LOG& log, const char* fmt, ...)
-//		{
-//			char buf[512];
-//			va_list a; va_start(a, fmt); vsnprintf(buf, sizeof(buf), fmt, a); va_end(a);
-//			Log::WriteLine(log, buf, "");
-//		}
-//
-//		void AddLex(char lex, int line, int idx = NONE)
-//		{
-//			LT::Entry e;
-//			e.lexema[0] = lex; e.numberStr = line; e.idxTI = idx;
-//			LT::Add(LexTable, e);
-//		}
-//
-//		int AddId(const char* id, const char* scope, int type)
-//		{
-//			IT::Entry e = {};   // обнуляем: value = 0, valueStr = nullptr
-//			strncpy_s(e.id, sizeof(e.id), id, _TRUNCATE);
-//			strncpy_s(e.scope, sizeof(e.scope), scope, _TRUNCATE);
-//			e.iddatatype = type;
-//			IT::Add(IdTable, e);
-//			return IdTable.size - 1;
-//		}
-//
-//		// Поиск использования идентификатора: сначала в текущей области, затем в global
-//		// (так находятся имена функций и глобальные объявления)
-//		int FindId(char* id, char* scope)
-//		{
-//			char global[] = "global";
-//			int idx = IT::IsId(IdTable, id, scope);
-//			return idx != NONE ? idx : IT::IsId(IdTable, id, global);
-//		}
-//
-//		// Паттерн "<id> = <литерал> ;": проверяем две последние лексемы в LT и символ после литерала.
-//		// Вызывать ДО добавления лексемы литерала. Возвращает индекс id в IT или NONE.
-//		int AssignTarget(const In::IN& in, int next)
-//		{
-//			while (next < in.size && (in.text[next] == ' ' || in.text[next] == '\t')) next++;
-//			int n = LexTable.size;
-//			if (n < 2 || next >= in.size || in.text[next] != ';') return NONE;
-//			if (LexTable.table[n - 1].lexema[0] != LEX_ASSIGN || LexTable.table[n - 2].lexema[0] != LEX_ID) return NONE;
-//			return LexTable.table[n - 2].idxTI;
-//		}
-//
-//		// Вывод ТЛ (построчно) и ТИ (с областью видимости) в протокол
-//		void PrintTables(Log::LOG& log)
-//		{
-//			Row(log, "");
-//			Row(log, "---------- LEXEME TABLE ----------");
-//			for (int i = 0; i < LexTable.size; )
-//			{
-//				int line = LexTable.table[i].numberStr, n = 0;
-//				char buf[256];
-//				for (; i < LexTable.size && LexTable.table[i].numberStr == line && n < 255; i++)
-//					buf[n++] = LexTable.table[i].lexema[0];
-//				buf[n] = '\0';
-//				Row(log, "%03d  %s", line, buf);
-//			}
-//
-//			Row(log, "");
-//			Row(log, "---------- IDENTIFIER TABLE ----------");
-//			Row(log, "%-4s %-6s %-16s %-8s %s", "N", "id", "scope", "type", "value");
-//			for (int i = 0; i < IdTable.size; i++)
-//			{
-//				IT::Entry& e = IdTable.table[i];
-//				char val[300] = "";
-//				if (e.iddatatype == IT_INTEGER) sprintf_s(val, "%d", e.value);
-//				else if (e.valueStr) sprintf_s(val, "'%s'", e.valueStr);
-//				const char* type = e.iddatatype == IT_INTEGER ? "integer" : e.iddatatype == IT_STRING ? "string" : "-";
-//				Row(log, "%-4d %-6s %-16s %-8s %s", i, e.id, e.scope, type, val);
-//			}
-//		}
-//	}
-//
-//	void LexicalAnalysis(In::IN& in, Log::LOG& log)
-//	{
-//		// Текущая область видимости. Идентификатор в IT уникален парой (id, scope),
-//		// поэтому x в main -> (x, "main"), а x в функции fi -> (x, "function_fi") - это разные записи.
-//		char currentScope[SCORE_MAXSIZE] = "global";
-//		int line = 1, lineStart = 0, depth = 0;
-//		int declType = 0;             // тип из последнего integer/string, ожидающий идентификатор
-//		bool expectFuncName = false;  // сразу после 'function' ждём имя функции
-//
-//		for (int i = 0; i < in.size; i++)
-//		{
-//			char c = in.text[i];
-//			int col = i - lineStart + 1;
-//
-//			if (c == ' ' || c == '\t') continue;
-//			if (c == '\n') { line++; lineStart = i + 1; continue; }
-//
-//			// ---------- слово: ключевое слово или идентификатор ----------
-//			if (IsLetter(c))
-//			{
-//				int start = i;
-//				while (i < in.size && (IsLetter(in.text[i]) || IsDigit(in.text[i]))) i++;
-//				int len = i - start;
-//				i--;                                    // остаёмся на последней букве слова
-//				char word[SCORE_MAXSIZE] = "", code = 0;
-//				if (len >= (int)sizeof(word)) throw ERROR_THROW_IN(121, line, col);
-//				memcpy(word, in.text + start, len);
-//
-//				if (Automats::IsKeyWord(word, code))
-//				{
-//					AddLex(code, line);
-//					// integer и string дают одну лексему 't', поэтому тип берём по тексту слова
-//					if (!strcmp(word, "integer")) declType = IT_INTEGER;
-//					else if (!strcmp(word, "string")) declType = IT_STRING;
-//					else if (code == LEX_FUNCTION) expectFuncName = true;
-//					else if (code == LEX_MAIN) strncpy_s(currentScope, sizeof(currentScope), "main", _TRUNCATE);
-//				}
-//				else
-//				{
-//					if (len >= ID_MAXSIZE) throw ERROR_THROW_IN(121, line, col);
-//					// объявление (был integer/string) ищем только в текущей области,
-//					// использование - в текущей, затем в global
-//					int idx = declType ? IT::IsId(IdTable, word, currentScope) : FindId(word, currentScope);
-//					if (idx == NONE) idx = AddId(word, currentScope, declType);
-//					AddLex(LEX_ID, line, idx);
-//					declType = 0;
-//
-//					// Имя функции уже записано в ТЕКУЩУЮ (global) область, а все дальнейшие
-//					// идентификаторы (параметры, локальные) попадут в function_<имя>.
-//					if (expectFuncName)
-//					{
-//						expectFuncName = false;
-//						snprintf(currentScope, sizeof(currentScope), "function_%s", word);
-//					}
-//				}
-//				continue;
-//			}
-//
-//			// ---------- целочисленный литерал ----------
-//			if (IsDigit(c))
-//			{
-//				long long v = 0;
-//				while (i < in.size && IsDigit(in.text[i]))
-//				{
-//					v = v * 10 + (in.text[i++] - '0');
-//					if (v > INT_MAX) throw ERROR_THROW_IN(124, line, col);
-//				}
-//				int target = AssignTarget(in, i);       // i - первая позиция после литерала
-//				if (target != NONE && IdTable.table[target].iddatatype == IT_INTEGER)
-//					IdTable.table[target].value = (int)v;   // несовпадение типов - задача семантики
-//				AddLex(LEX_LITERAL, line);
-//				i--;
-//				continue;
-//			}
-//
-//			// ---------- строковый литерал в одинарных кавычках (" запрещена таблицей In) ----------
-//			if (c == '\'')
-//			{
-//				int start = ++i;
-//				while (i < in.size && in.text[i] != '\'' && in.text[i] != '\n') i++;
-//				if (i >= in.size || in.text[i] != '\'') throw ERROR_THROW_IN(111, line, col);   // нет закрывающей '
-//				int len = i - start;
-//				if (len > 255) throw ERROR_THROW_IN(125, line, col);
-//
-//				int target = AssignTarget(in, i + 1);
-//				if (target != NONE && IdTable.table[target].iddatatype == IT_STRING)
-//				{
-//					IT::Entry& e = IdTable.table[target];
-//					delete[] e.valueStr;                // повторное присваивание: освобождаем старое
-//					e.valueStr = new char[len + 1];
-//					memcpy(e.valueStr, in.text + start, len);
-//					e.valueStr[len] = '\0';
-//				}
-//				AddLex(LEX_LITERAL, line);
-//				continue;
-//			}
-//
-//			// ---------- разделитель / оператор (через FST) ----------
-//			char sep[2] = { c, '\0' }, code = 0;
-//			if (!Automats::IsSeparator(sep, code)) throw ERROR_THROW_IN(111, line, col);
-//			AddLex(code, line);
-//
-//			// Границы области: любая функция и main заканчиваются своей закрывающей '}',
-//			// после чего возвращаемся в global.
-//			if (c == '{') depth++;
-//			else if (c == '}' && --depth <= 0)
-//			{
-//				depth = 0;
-//				strncpy_s(currentScope, sizeof(currentScope), "global", _TRUNCATE);
-//			}
-//		}
-//
-//		PrintTables(log);
-//	}
-//}

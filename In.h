@@ -6,10 +6,10 @@
 #define IN_CODE_TABLE {\
     In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::T, In::IN::T, In::IN::F, In::IN::F, In::IN::I, In::IN::F, In::IN::F,\
     In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F,\
-    In::IN::T, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T,\
-    In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::F, In::IN::T, In::IN::F, In::IN::T, In::IN::F, In::IN::F,\
+    In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::F, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T,\
+    In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T,\
     In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F,\
-    In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F,\
+    In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::T, In::IN::F, In::IN::F, In::IN::F,\
     In::IN::F, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T,\
     In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::T, In::IN::F, In::IN::T, In::IN::F, In::IN::F,\
     In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F, In::IN::F,\

@@ -1,5 +1,5 @@
 #pragma once
-#define ID_MAXSIZE     6 
+#define ID_MAXSIZE     10 
 #define TI_MAXSIZE     4096  
 #define TI_INT_DEFAULT 0x0000000
 #define TI_STR_DEFAULT 0x00  
@@ -8,7 +8,7 @@
 
 namespace IT
 {
-	enum IDDATATYPE { INT = 1, STR = 2, NONE = 3 };
+	enum IDDATATYPE { INT = 1, STR = 2, SYMBOL = 3,BOOL = 4, NONE = 5 };
 	enum IDTYPE { V = 1, F = 2, P = 3, L = 4 };
 
 	struct Entry
@@ -21,11 +21,14 @@ namespace IT
 		union
 		{
 			int valInt;
+			char valSymbol;
+			bool valBool ;
 			struct
 			{
 				char len;
-				char str[TI_STR_MAXSIZE - 1];
+				char str[TI_STR_MAXSIZE + 1];
 			}valStr;
+
 		} value;
 	};
 

@@ -2,7 +2,8 @@
 #include <locale>
 #include <cwchar>
 #include <fstream>
-
+#include "MFST.h" // магазинный автомат
+#include "GRB.h"
 #include "Error.h"
 #include "Parm.h"
 #include "Log.h"
@@ -10,67 +11,50 @@
 #include "Lexer.h"
 #include "LT.h"
 #include "IT.h"
-//#include "MFST.h"
-//#include "GRB.h"
+#include <tchar.h>
+
 
 int wmain(int argc, wchar_t* argv[])
 {
-    setlocale(LC_ALL, "rus");
-    Log::LOG log;
-    try
-    {
-        Parm::PARM parm = Parm::getparm(argc, argv);
-        log = Log::getlog(parm.log);
-        In::IN in = In::getin(parm.in);
-        
-        Log::WriteLog(log);
-        Log::WriteParm(log, parm);
-        Log::WriteIn(log, in);
+	setlocale(LC_ALL, "rus");
+	Log::LOG log;
+	try
+	{
+		Parm::PARM parm = Parm::getparm(argc, argv);
+		log = Log::getlog(parm.log);
+		In::IN in = In::getin(parm.in);
 
-        LEXER::Lexer lexer;
-        lexer.LexicalAnalysis(in, log);
-        lexer.PrintTables(log);
+		Log::WriteLog(log);
+		Log::WriteParm(log, parm);
+		Log::WriteIn(log, in);
 
-        //// ============================================================
-        //// СИНТАКСИЧЕСКИЙ АНАЛИЗ
-        //// ============================================================
-        //LEX::LEX lex;
-        //lex.lextable = Lexer::LexTable;
+		LEXER::Lexer lexer;
+		lexer.LexicalAnalysis(in, log);
+		lexer.PrintTables(log);
 
-        //// Добавляем '$' в конец ТЛ
-        //LT::Entry dollarEntry;
-        //dollarEntry.lexema[0] = '$';
-        //dollarEntry.sn = 0;
-        //dollarEntry.idxTI = LT_TI_NULLIDX;
-        //LT::Add(lex.lextable, dollarEntry);
+		MFST_TRACE_START // отладка
 
-        //MFST::Mfst mfst(lex, GRB::getGreibach());
-        //mfst.start();
+		MFST::Mfst mfst(lexer, GRB::getGreibach()); // автомат
+		mfst.start();        // старт синтаксического анализа
+		mfst.savededucation();
+		mfst.printrules();
 
-        //// ============================================================
-        //// ВЫВОД ДЕРЕВА РАЗБОРА
-        //// ============================================================
-        //std::cout << std::endl;
-        //std::cout << "--- ДЕРЕВО РАЗБОРА ---" << std::endl;
-        //mfst.savededucation();
-        //mfst.printrules();
+		LT::Delete(lexer.lexTable);
+		IT::Delete(lexer.idTable);
 
-        // ---------- очистка ----------
-        /*LT::Delete(Lexer::LexTable);
-        IT::Delete(Lexer::IdTable);*/
+		Log::Close(log);
+		delete[] in.text;
 
-        Log::Close(log);
-        delete[] in.text;
+		std::cout << "Лексический и синтаксический анализ выполнены." << std::endl;
+	}
 
-        std::cout << "Лексический и синтаксический анализ выполнены." << std::endl;
-    }
-    catch (Error::ERROR e)
-    {
-        Log::WriteError(log, e);
-        Log::Close(log);
-        std::cout << "Ошибка " << e.id << ": " << e.message << std::endl;
-    }
+	catch (Error::ERROR e)
+	{
+		Log::WriteError(log, e);
+		Log::Close(log);
+		std::cout << "Ошибка " << e.id << ": " << e.message << std::endl;
+	}
 
-    system("pause");
-    return 0;
+	system("pause");
+	return 0;
 }

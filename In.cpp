@@ -29,10 +29,30 @@ namespace In {
 
         unsigned char ch;
         int pos = 0;
+        bool comm = false;
 
         while (fin.get(reinterpret_cast<char&>(ch))) {
             pos++;
-            if (newIn.code[ch] == newIn.T) {
+            if (newIn.code[ch] == newIn.T)
+            {
+                if (comm)
+                {
+                    if (ch != '\n')
+                    {
+                        newIn.ignore++;
+                        continue;
+                    }
+                    else 
+                    {
+                        comm = false;
+                    }
+
+                }
+                if (ch == '#' )
+                {
+                    comm = true;
+                    continue;
+                }
                 newIn.text[newIn.size] = ch;
                 newIn.size++;
             }
@@ -43,7 +63,7 @@ namespace In {
             else if (newIn.code[ch] == newIn.I)
                 newIn.ignore++;
 
-            if (ch == IN_CODE_ENDL  || ch == '\r') {
+            if (ch == IN_CODE_ENDL || ch == '\r') {
                 newIn.lines++;
                 pos = 0;
             }
@@ -63,7 +83,7 @@ namespace In {
         {
             char c = in.text[i];
 
-            if ((c == ' '  || c == '\n') && in.redactedText[0] == '\r')
+            if ((c == ' ' || c == '\n') && in.redactedText[0] == '\r')
                 continue;
 
             if (i > 0)
